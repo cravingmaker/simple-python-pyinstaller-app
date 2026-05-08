@@ -1,32 +1,36 @@
-pipeline {
-    agent any
-    options {
-        skipStagesAfterUnstable()
-    }
-    stages {
-        stage('Build') {
-            steps {
+node {
+    // Triggers Poll SCM every 2 minutes
+    properties([
+        pipelineTriggers([pollSCM('H/2 * * * *')])
+    ])
+
+    // Scripted pipelines require an explicit checkout — unlike Declarative pipelines
+    checkout scm
+
+    docker.image('python:3').inside {
+        // Redirect pip user-install to the workspace (always writable by Jenkins)
+        withEnv(["PYTHONUSERBASE=${env.WORKSPACE}/.python-packages"]) {
+            stage('Build') {
+                echo 'Building the Python application...'
+                sh 'pip install --user pytest pyinstaller'
                 sh 'python3 -m py_compile sources/add2vals.py sources/calc.py'
             }
-        }
-        stage('Test') {
-            steps {
-                sh 'py.test --verbose --junit-xml test-reports/results.xml sources/test_calc.py'
-            }
-            post {
-                always {
+
+            stage('Test') {
+                echo 'Running tests...'
+                try {
+                    sh '$PYTHONUSERBASE/bin/pytest --verbose --junit-xml test-reports/results.xml sources/test_calc.py'
+                } finally {
+                    // Always archive test results
                     junit 'test-reports/results.xml'
                 }
             }
-        }
-        stage('Deliver') {
-            steps {
-                sh 'pyinstaller --onefile sources/add2vals.py'
-            }
-            post {
-                success {
-                    archiveArtifacts 'dist/add2vals'
-                }
+
+            stage('Deliver') {
+                echo 'Packaging and delivering...'
+                sh '$PYTHONUSERBASE/bin/pyinstaller --onefile sources/add2vals.py'
+                // Archive the artifact on success
+                archiveArtifacts artifacts: 'dist/add2vals', fingerprint: true
             }
         }
     }
